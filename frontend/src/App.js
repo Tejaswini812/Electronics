@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import './App.css';
 
@@ -19,22 +19,38 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [expandedPrices, setExpandedPrices] = useState({});
+  
+  // Use ref to track if component is mounted
+  const isMountedRef = useRef(true);
+  const timeoutRef = useRef(null);
 
-  // Load existing components on mount
+  // Cleanup on unmount
   useEffect(() => {
-    loadComponents();
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      // Clear any pending timeouts
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
   }, []);
 
-  const loadComponents = async () => {
+  // Load existing components on mount
+  const loadComponents = useCallback(async () => {
     try {
       const response = await axios.get(`${API_URL}/api/components`);
-      if (response.data.success) {
+      if (response.data.success && isMountedRef.current) {
         setComponents(response.data.data || []);
       }
     } catch (err) {
       console.error('Error loading components:', err);
     }
-  };
+  }, [API_URL]);
+
+  useEffect(() => {
+    loadComponents();
+  }, [loadComponents]);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -44,6 +60,8 @@ function App() {
       return;
     }
 
+    if (!isMountedRef.current) return;
+
     setLoading(true);
     setError(null);
     setSuccess(null);
@@ -52,6 +70,8 @@ function App() {
       const response = await axios.post(`${API_URL}/api/search`, {
         partNumber: partNumber.trim()
       });
+
+      if (!isMountedRef.current) return;
 
       if (response.data.success) {
         // Verify that we actually got data
@@ -70,7 +90,14 @@ function App() {
             await loadComponents();
             
             // Clear success message after 5 seconds
-            setTimeout(() => setSuccess(null), 5000);
+            if (timeoutRef.current) {
+              clearTimeout(timeoutRef.current);
+            }
+            timeoutRef.current = setTimeout(() => {
+              if (isMountedRef.current) {
+                setSuccess(null);
+              }
+            }, 5000);
           } else {
             setError('Component found but no data available. The part may not exist on FindChips.');
             setLoading(false);
@@ -84,12 +111,15 @@ function App() {
         setLoading(false);
       }
     } catch (err) {
+      if (!isMountedRef.current) return;
       const errorMessage = err.response?.data?.error || err.response?.data?.message || 'Failed to search component. Please try again.';
       setError(errorMessage);
       console.error('Search error:', err);
       setLoading(false);
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -98,24 +128,38 @@ function App() {
       return;
     }
 
+    if (!isMountedRef.current) return;
+
     try {
       const response = await axios.delete(`${API_URL}/api/components`);
-      if (response.data.success) {
+      if (response.data.success && isMountedRef.current) {
         setComponents([]);
         setSuccess('Search history cleared successfully!');
-        setTimeout(() => setSuccess(null), 3000);
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+        timeoutRef.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setSuccess(null);
+          }
+        }, 3000);
       }
     } catch (err) {
+      if (!isMountedRef.current) return;
       setError('Failed to clear history. Please try again.');
       console.error('Clear history error:', err);
     }
   };
 
   const handleExportExcel = async () => {
+    if (!isMountedRef.current) return;
+
     try {
       const response = await axios.get(`${API_URL}/api/export`, {
         responseType: 'blob'
       });
+      
+      if (!isMountedRef.current) return;
       
       // Create download link
       const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -125,10 +169,19 @@ function App() {
       document.body.appendChild(link);
       link.click();
       link.remove();
+      window.URL.revokeObjectURL(url);
       
       setSuccess('Excel file downloaded successfully!');
-      setTimeout(() => setSuccess(null), 3000);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      timeoutRef.current = setTimeout(() => {
+        if (isMountedRef.current) {
+          setSuccess(null);
+        }
+      }, 3000);
     } catch (err) {
+      if (!isMountedRef.current) return;
       setError('Failed to export Excel file. Please try again.');
       console.error('Export error:', err);
     }
@@ -172,6 +225,8 @@ function App() {
       return validPatterns.some(p => p.test(s));
     };
 
+    if (!isMountedRef.current) return;
+
     setUploading(true);
     setError(null);
     setSuccess(null);
@@ -185,6 +240,8 @@ function App() {
           'Content-Type': 'multipart/form-data'
         }
       });
+
+      if (!isMountedRef.current) return;
 
       if (response.data.success) {
         const rawParts = response.data.partNumbers || [];
@@ -203,6 +260,7 @@ function App() {
         let failCount = 0;
         
         for (const partNum of partNumbers) {
+          if (!isMountedRef.current) break;
           try {
             await axios.post(`${API_URL}/api/search`, { partNumber: partNum.trim() });
             successCount++;
@@ -212,18 +270,30 @@ function App() {
           }
         }
 
+        if (!isMountedRef.current) return;
+
         await loadComponents();
         
         setSuccess(`Successfully processed ${successCount} part number(s). ${failCount > 0 ? `${failCount} failed.` : ''}`);
-        setTimeout(() => setSuccess(null), 5000);
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+        timeoutRef.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setSuccess(null);
+          }
+        }, 5000);
         
         setFileInputKey(prev => prev + 1);
       }
     } catch (err) {
+      if (!isMountedRef.current) return;
       setError(err.response?.data?.error || 'Failed to process uploaded file. Please try again.');
       console.error('Upload error:', err);
     } finally {
-      setUploading(false);
+      if (isMountedRef.current) {
+        setUploading(false);
+      }
     }
   };
 
@@ -292,11 +362,15 @@ function App() {
       return;
     }
 
+    if (!isMountedRef.current) return;
+
     try {
       const encodedPartNumber = encodeURIComponent(onePartNumber.trim());
       const response = await axios.get(`${API_URL}/api/export/${encodedPartNumber}`, {
         responseType: 'blob'
       });
+      
+      if (!isMountedRef.current) return;
       
       // Create download link
       const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -311,8 +385,16 @@ function App() {
       window.URL.revokeObjectURL(url);
       
       setSuccess(`Excel file for ${onePartNumber} downloaded successfully!`);
-      setTimeout(() => setSuccess(null), 3000);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      timeoutRef.current = setTimeout(() => {
+        if (isMountedRef.current) {
+          setSuccess(null);
+        }
+      }, 3000);
     } catch (err) {
+      if (!isMountedRef.current) return;
       const errorMessage = err.response?.data?.error || err.message || 'Failed to export';
       setError(`${errorMessage} (${onePartNumber})`);
       console.error('Export one error:', err);
