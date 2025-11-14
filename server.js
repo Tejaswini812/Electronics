@@ -237,7 +237,10 @@ function isValidPartNumber(part) {
         /MICROCONTROLLER/i,           // Exclude "MICROCONTROLLER" (description)
         /BIT.*CONTROLLER/i,           // Exclude "BIT CONTROLLER" patterns (descriptions)
         /^[A-Z]{10,}\d/i,             // Very long prefixes (likely descriptions)
-        /(CONNECTOR|RESISTOR|CAPACITOR|DIODE|TRANSISTOR)[A-Z]*\d/i  // Common component descriptions
+        /(CONNECTOR|RESISTOR|CAPACITOR|DIODE|TRANSISTOR)[A-Z]*\d/i,  // Common component descriptions
+        /^[A-Z]+\d+\-[A-Z]+\d+$/i,    // Range patterns (SW17-SW19, D1-D11, C1-C10, etc.)
+        /^[A-Z]+\d+\-\d+$/i,          // Range patterns with same prefix (SW1-SW19, D1-D11, etc.)
+        /^[A-Z]+\-\d+$/i              // Partial ranges (SW-SW19, D-D11, etc.)
     ];
     
     // Check exclusion patterns
@@ -835,7 +838,19 @@ app.post('/api/search', async (req, res) => {
             componentData = await searchFindChips(trimmedPartNumber);
         } catch (searchError) {
             console.error(`❌ Error searching FindChips for ${trimmedPartNumber}:`, searchError.message);
-            return res.status(500).json({
+            
+            // Determine if this is a validation error (400) or server error (500)
+            const errorMessage = searchError.message || '';
+            const isValidationError = (
+                errorMessage.includes('not found') ||
+                errorMessage.includes('not a valid part number') ||
+                errorMessage.includes('No data found') ||
+                errorMessage.includes('not exist') ||
+                errorMessage.includes('unavailable')
+            );
+            
+            const statusCode = isValidationError ? 404 : 500;
+            return res.status(statusCode).json({
                 success: false,
                 error: `Failed to search for "${trimmedPartNumber}": ${searchError.message}. Please check if the part number is correct and try again.`
             });

@@ -207,9 +207,23 @@ function App() {
       
       // Exclude common false positives
       const excludePatterns = [
-        /^\d{4}$/, /^\d{1,3}$/, /^[A-Z]{1,3}$/, /^[A-Z]{1,2}\d{1,2}$/,
-        /^\d{4}-\d{2}-\d{2}$/, /^REF\d+$/i, /^ITEM\d+$/i, /^PART\d+$/i,
-        /^\d{6,8}$/, /^[A-Z]{2,4}$/
+        /^\d{4}$/,                    // Years (2024, 2025, etc.)
+        /^\d{1,3}$/,                  // Pure numbers (1-999)
+        /^[A-Z]{1,3}$/,               // Abbreviations (API, URL, etc.)
+        /^[A-Z]{1,2}\d{1,2}$/,        // Short codes (A1, B2, etc.)
+        /^\d{4}-\d{2}-\d{2}$/,        // Dates (2024-01-01)
+        /^REF\d+$/i,                  // References (REF123)
+        /^ITEM\d+$/i,                 // Items (ITEM123)
+        /^PART\d+$/i,                 // Parts (PART123)
+        /^\d{6,8}$/,                  // Large numbers (123456)
+        /^[A-Z]{2,4}$/,               // Common abbreviations (SW1, D1, C6, etc.)
+        /CUSTOMER/i,                  // Exclude "CUSTOMER" (description, not part number)
+        /MICROCONTROLLER/i,           // Exclude "MICROCONTROLLER" (description)
+        /BIT.*CONTROLLER/i,           // Exclude "BIT CONTROLLER" patterns (descriptions)
+        /(CONNECTOR|RESISTOR|CAPACITOR|DIODE|TRANSISTOR)[A-Z]*\d/i,  // Common component descriptions
+        /^[A-Z]+\d+\-[A-Z]+\d+$/i,    // Range patterns (SW17-SW19, D1-D11, C1-C10, etc.)
+        /^[A-Z]+\d+\-\d+$/i,          // Range patterns with same prefix (SW1-SW19, D1-D11, etc.)
+        /^[A-Z]+\-\d+$/i              // Partial ranges (SW-SW19, D-D11, etc.)
       ];
       if (excludePatterns.some(p => p.test(s))) return false;
       
