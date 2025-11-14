@@ -58,8 +58,8 @@ function App() {
         if (response.data.data) {
           const hasValidData = response.data.data.description && 
             response.data.data.description !== `${partNumber.trim()} Component` &&
-            (response.data.data.lowestPrice && response.data.data.lowestPrice !== 'N/A' ||
-             response.data.data.distributor && response.data.data.distributor !== 'N/A' ||
+            ((response.data.data.lowestPrice && response.data.data.lowestPrice !== 'N/A') ||
+             (response.data.data.distributor && response.data.data.distributor !== 'N/A') ||
              response.data.data.manufacturer);
           
           if (hasValidData) {

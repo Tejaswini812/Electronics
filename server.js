@@ -790,7 +790,7 @@ app.post('/api/search', async (req, res) => {
         // Save to Excel for this user
         try {
             const saved = saveComponentsToExcel(components, userId);
-            if (!saved) {
+        if (!saved) {
                 console.error('⚠️ Failed to save to Excel file');
                 return res.status(500).json({
                     success: false,
@@ -882,8 +882,8 @@ app.get('/api/export', (req, res) => {
                 if (!res.headersSent) {
                     res.status(500).json({ success: false, error: 'Failed to export Excel file' });
                 }
-            }
-        });
+    }
+});
     } catch (error) {
         console.error('Error in /api/export:', error);
         res.status(500).json({ success: false, error: error.message || 'Failed to export Excel file' });
