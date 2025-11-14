@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+// Use relative URLs in production (served from same Express server)
+// Use absolute URL in development (React dev server on port 3000)
+const API_URL = process.env.REACT_APP_API_URL || 
+  (window.location.hostname === 'localhost' ? 'http://localhost:3001' : '');
 
 // Configure axios to send credentials (cookies) with requests
 axios.defaults.withCredentials = true;
