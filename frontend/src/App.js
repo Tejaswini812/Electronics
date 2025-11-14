@@ -2,9 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 
-// Use relative URLs in production (Nginx will proxy), absolute URL in development
-const API_URL = process.env.REACT_APP_API_URL || 
-    (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3001');
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
 // Configure axios to send credentials (cookies) with requests
 axios.defaults.withCredentials = true;

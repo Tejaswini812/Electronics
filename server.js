@@ -20,12 +20,17 @@ try {
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const NODE_ENV = process.env.NODE_ENV || 'development';
 
 // Middleware
 // CORS configuration - allow both development and production origins
-const allowedOrigins = process.env.NODE_ENV === 'production' 
-    ? ['https://semiconventures.in', 'https://www.semiconventures.in']
-    : ['http://localhost:3000'];
+const allowedOrigins = [
+    'http://localhost:3000',
+    'https://semiconventures.in',
+    'http://semiconventures.in',
+    'https://www.semiconventures.in',
+    'http://www.semiconventures.in'
+];
 
 app.use(cors({
     origin: function (origin, callback) {
@@ -34,7 +39,7 @@ app.use(cors({
         if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            callback(null, true); // Allow all origins in production for flexibility
+            callback(null, true); // Allow all origins in production for now
         }
     },
     credentials: true
@@ -46,7 +51,7 @@ app.use(session({
     resave: false,
     saveUninitialized: true,
     cookie: {
-        secure: process.env.NODE_ENV === 'production', // Set to true if using HTTPS
+        secure: NODE_ENV === 'production', // Set to true if using HTTPS
         httpOnly: true,
         maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
@@ -962,7 +967,10 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// Serve React app for all other routes
+// Serve static files from React app (CSS, JS, images, etc.)
+app.use(express.static(path.join(__dirname, 'frontend/build')));
+
+// Serve React app for all other routes (SPA routing)
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend/build/index.html'));
 });
