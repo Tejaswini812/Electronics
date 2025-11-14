@@ -69,8 +69,6 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.static('frontend/build'));
-
 // Configure multer for file uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -459,6 +457,19 @@ async function extractPartNumbersFromImage(imagePath) {
     }
 }
 
+// Get random user agent to avoid detection
+function getRandomUserAgent() {
+    const userAgents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ];
+    return userAgents[Math.floor(Math.random() * userAgents.length)];
+}
+
 // Search FindChips for component
 async function searchFindChips(partNumber) {
     if (!checkRateLimit()) {
@@ -466,31 +477,70 @@ async function searchFindChips(partNumber) {
     }
     
     try {
-        // Add random delay to avoid detection
-        await new Promise(resolve => setTimeout(resolve, getRandomDelay()));
+        // Add random delay to avoid detection (longer delay for production)
+        const delay = process.env.NODE_ENV === 'production' ? 
+            Math.floor(Math.random() * 2000) + 2000 : // 2-4 seconds in production
+            getRandomDelay(); // 0.5-1.5 seconds in development
+        await new Promise(resolve => setTimeout(resolve, delay));
         
         const searchUrl = `https://www.findchips.com/search/${encodeURIComponent(partNumber)}`;
         
+        // Use more realistic headers to avoid detection
+        const headers = {
+            'User-Agent': getRandomUserAgent(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+            'Referer': 'https://www.findchips.com/',
+            'DNT': '1'
+        };
+        
         const response = await axios.get(searchUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            },
-            timeout: 10000
+            headers: headers,
+            timeout: 15000, // Increased timeout
+            maxRedirects: 5,
+            validateStatus: function (status) {
+                return status >= 200 && status < 400; // Accept redirects
+            }
         });
+        
+        // Check if response is blocked or empty
+        if (!response.data || response.data.length < 1000) {
+            console.error('❌ Response too short or empty - likely blocked');
+            throw new Error('FindChips returned an empty or blocked response. The server IP may be blocked. Please try again later.');
+        }
         
         const $ = cheerio.load(response.data);
         
         // Save HTML for debugging (first time only)
         saveHtmlForDebug(response.data, partNumber);
         
-        // Check if FindChips returned an error page or no results
+        // Check if FindChips blocked the request
         const pageTitle = $('title').text().toLowerCase();
         const pageText = $('body').text().toLowerCase();
+        const pageHtml = response.data.toLowerCase();
+        
+        // Check for blocking indicators
+        if (pageTitle.includes('access denied') ||
+            pageTitle.includes('blocked') ||
+            pageTitle.includes('forbidden') ||
+            pageText.includes('access denied') ||
+            pageText.includes('your request has been blocked') ||
+            pageText.includes('cloudflare') ||
+            pageText.includes('checking your browser') ||
+            pageHtml.includes('cf-browser-verification') ||
+            pageHtml.includes('challenge-platform') ||
+            pageHtml.includes('just a moment')) {
+            console.error('❌ FindChips blocked the request - Cloudflare or anti-bot protection');
+            throw new Error('FindChips is blocking automated requests from this server. This is a temporary limitation. Please try again in a few minutes or contact support.');
+        }
         
         // Check for error indicators
         if (pageTitle.includes('error') || 
@@ -699,17 +749,48 @@ async function searchFindChips(partNumber) {
         return componentData;
         
     } catch (error) {
-        console.error('Error searching FindChips:', error.message);
+        console.error('❌ Error searching FindChips:', error.message);
+        console.error('❌ Error details:', {
+            code: error.code,
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            url: error.config?.url
+        });
         
-        if (error.response && error.response.status === 403) {
-            throw new Error('Access denied. The website may be blocking automated requests.');
-        } else if (error.response && error.response.status === 429) {
-            throw new Error('Too many requests. Please wait and try again later.');
-        } else if (error.code === 'ECONNABORTED') {
-            throw new Error('Request timeout. Please try again.');
-        } else {
-            throw new Error(`Failed to search component: ${error.message}`);
+        // Handle specific error cases
+        if (error.response) {
+            if (error.response.status === 403) {
+                throw new Error('FindChips is blocking automated requests from this server. This is a temporary limitation. Please try again in a few minutes.');
+            } else if (error.response.status === 429) {
+                throw new Error('Too many requests to FindChips. Please wait 1-2 minutes and try again.');
+            } else if (error.response.status === 503 || error.response.status === 502) {
+                throw new Error('FindChips service is temporarily unavailable. Please try again in a few minutes.');
+            } else if (error.response.status >= 500) {
+                throw new Error('FindChips server error. Please try again later.');
+            } else if (error.response.status === 404) {
+                throw new Error(`Part number "${partNumber}" not found on FindChips. Please verify the part number and try again.`);
+            }
         }
+        
+        // Handle network errors
+        if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+            throw new Error('Request to FindChips timed out. The server may be slow or blocking requests. Please try again in a few minutes.');
+        } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+            throw new Error('Cannot connect to FindChips. Please check your internet connection and try again.');
+        }
+        
+        // If error message already contains useful info, use it
+        if (error.message && (
+            error.message.includes('blocked') ||
+            error.message.includes('empty') ||
+            error.message.includes('not found') ||
+            error.message.includes('Cloudflare')
+        )) {
+            throw error; // Re-throw with original message
+        }
+        
+        // Generic error
+        throw new Error(`Failed to search component "${partNumber}": ${error.message}. This may be due to FindChips blocking automated requests. Please try again in a few minutes.`);
     }
 }
 
@@ -1053,6 +1134,69 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         res.status(500).json({ 
             success: false, 
             error: error.message || 'Failed to process uploaded file' 
+        });
+    }
+});
+
+// Diagnostic endpoint to test FindChips connectivity
+app.get('/api/test-findchips', async (req, res) => {
+    try {
+        const testPartNumber = 'LM358';
+        const testUrl = `https://www.findchips.com/search/${encodeURIComponent(testPartNumber)}`;
+        
+        console.log('🔍 Testing FindChips connectivity...');
+        console.log('📡 Test URL:', testUrl);
+        
+        const headers = {
+            'User-Agent': getRandomUserAgent(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.findchips.com/'
+        };
+        
+        const response = await axios.get(testUrl, {
+            headers: headers,
+            timeout: 10000,
+            validateStatus: function (status) {
+                return status >= 200 && status < 400;
+            }
+        });
+        
+        const responseLength = response.data ? response.data.length : 0;
+        const pageTitle = response.data ? cheerio.load(response.data)('title').text() : 'No title';
+        const pageText = response.data ? cheerio.load(response.data)('body').text().toLowerCase() : '';
+        
+        const isBlocked = (
+            responseLength < 1000 ||
+            pageTitle.toLowerCase().includes('blocked') ||
+            pageTitle.toLowerCase().includes('access denied') ||
+            pageText.includes('cloudflare') ||
+            pageText.includes('checking your browser')
+        );
+        
+        res.json({
+            success: true,
+            test: {
+                url: testUrl,
+                status: response.status,
+                responseLength: responseLength,
+                pageTitle: pageTitle,
+                isBlocked: isBlocked,
+                canConnect: responseLength > 1000 && !isBlocked,
+                message: isBlocked ? 
+                    'FindChips is blocking requests from this server IP. This is why searches are not working.' :
+                    'FindChips is accessible. The issue may be with specific part numbers or rate limiting.'
+            }
+        });
+    } catch (error) {
+        console.error('❌ FindChips connectivity test failed:', error.message);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            test: {
+                canConnect: false,
+                message: 'Cannot connect to FindChips. The server IP may be blocked or there is a network issue.'
+            }
         });
     }
 });
