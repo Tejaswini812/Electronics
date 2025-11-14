@@ -54,18 +54,40 @@ function App() {
       });
 
       if (response.data.success) {
-        setSuccess(response.data.message || 'Component found and saved successfully!');
-        setPartNumber('');
-        
-        // Reload components to show updated data
-        await loadComponents();
-        
-        // Clear success message after 5 seconds
-        setTimeout(() => setSuccess(null), 5000);
+        // Verify that we actually got data
+        if (response.data.data) {
+          const hasValidData = response.data.data.description && 
+            response.data.data.description !== `${partNumber.trim()} Component` &&
+            (response.data.data.lowestPrice && response.data.data.lowestPrice !== 'N/A' ||
+             response.data.data.distributor && response.data.data.distributor !== 'N/A' ||
+             response.data.data.manufacturer);
+          
+          if (hasValidData) {
+            setSuccess(response.data.message || 'Component found and saved successfully!');
+            setPartNumber('');
+            
+            // Reload components to show updated data
+            await loadComponents();
+            
+            // Clear success message after 5 seconds
+            setTimeout(() => setSuccess(null), 5000);
+          } else {
+            setError('Component found but no data available. The part may not exist on FindChips.');
+            setLoading(false);
+          }
+        } else {
+          setError('No data returned from server. Please try again.');
+          setLoading(false);
+        }
+      } else {
+        setError(response.data.error || 'Failed to search component. Please try again.');
+        setLoading(false);
       }
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to search component. Please try again.');
+      const errorMessage = err.response?.data?.error || err.response?.data?.message || 'Failed to search component. Please try again.';
+      setError(errorMessage);
       console.error('Search error:', err);
+      setLoading(false);
     } finally {
       setLoading(false);
     }

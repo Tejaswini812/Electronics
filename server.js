@@ -234,7 +234,12 @@ function isValidPartNumber(part) {
         /^PART\d+$/i,                 // Parts (PART123)
         /^[A-Z]{2}\d{6}$/,            // Date codes (AB123456)
         /^\d{6,8}$/,                  // Large numbers (123456)
-        /^[A-Z]{2,4}$/                // Common abbreviations (SW1, D1, C6, etc.)
+        /^[A-Z]{2,4}$/,               // Common abbreviations (SW1, D1, C6, etc.)
+        /CUSTOMER/i,                  // Exclude "CUSTOMER" (description, not part number)
+        /MICROCONTROLLER/i,           // Exclude "MICROCONTROLLER" (description)
+        /BIT.*CONTROLLER/i,           // Exclude "BIT CONTROLLER" patterns (descriptions)
+        /^[A-Z]{10,}\d/i,             // Very long prefixes (likely descriptions)
+        /(CONNECTOR|RESISTOR|CAPACITOR|DIODE|TRANSISTOR)[A-Z]*\d/i  // Common component descriptions
     ];
     
     // Check exclusion patterns
@@ -483,6 +488,21 @@ async function searchFindChips(partNumber) {
         // Save HTML for debugging (first time only)
         saveHtmlForDebug(response.data, partNumber);
         
+        // Check if FindChips returned an error page or no results
+        const pageTitle = $('title').text().toLowerCase();
+        const pageText = $('body').text().toLowerCase();
+        
+        // Check for error indicators
+        if (pageTitle.includes('error') || 
+            pageTitle.includes('not found') || 
+            pageTitle.includes('404') ||
+            pageText.includes('no results found') ||
+            pageText.includes('no parts found') ||
+            pageText.includes('part not found') ||
+            pageText.includes('we couldn\'t find')) {
+            throw new Error(`Part number "${partNumber}" not found on FindChips. Please verify the part number and try again.`);
+        }
+        
         // Parse the page to extract component data
         const componentData = {
             partNumber: partNumber,
@@ -662,6 +682,20 @@ async function searchFindChips(partNumber) {
         console.log('Distributor   :', componentData.distributor || 'N/A');
         console.log('========================================\n');
         
+        // Validate that we extracted at least some data
+        const hasValidData = (
+            (componentData.description && componentData.description !== `${partNumber} Component` && componentData.description.length > 10) ||
+            (componentData.lowestPrice && componentData.lowestPrice !== 'N/A') ||
+            (componentData.distributor && componentData.distributor !== 'N/A') ||
+            (componentData.manufacturer && componentData.manufacturer.length > 2) ||
+            (componentData.availableStock && componentData.availableStock !== 'N/A')
+        );
+        
+        if (!hasValidData) {
+            console.error(`❌ No valid data extracted for part number: ${partNumber}`);
+            throw new Error(`No data found for part number "${partNumber}". The part may not exist on FindChips or may be unavailable. Please verify the part number and try again.`);
+        }
+        
         return componentData;
         
     } catch (error) {
@@ -688,10 +722,20 @@ app.post('/api/search', async (req, res) => {
         const { partNumber } = req.body;
         
         if (!partNumber || partNumber.trim() === '') {
-            return res.status(400).json({ error: 'Part number is required' });
+            return res.status(400).json({ 
+                success: false,
+                error: 'Part number is required' 
+            });
         }
-        if (!isValidPartNumber(partNumber)) {
-            return res.status(400).json({ error: `Not a valid part number: ${partNumber}. Please enter a valid part number (e.g., LM358, 1N4148, NE555).` });
+        
+        const trimmedPartNumber = partNumber.trim();
+        
+        // Validate part number
+        if (!isValidPartNumber(trimmedPartNumber)) {
+            return res.status(400).json({ 
+                success: false,
+                error: `"${trimmedPartNumber}" is not a valid part number. Please enter a valid part number (e.g., LM358, 1N4148, NE555, SN74HC595).` 
+            });
         }
         
         // Load existing components for this user
@@ -699,37 +743,80 @@ app.post('/api/search', async (req, res) => {
         
         // Check if component already exists
         const existingIndex = components.findIndex(c => 
-            c.partNumber && c.partNumber.toLowerCase() === partNumber.trim().toLowerCase()
+            c.partNumber && c.partNumber.toLowerCase() === trimmedPartNumber.toLowerCase()
         );
         
+        console.log(`\n🔍 Searching for part number: ${trimmedPartNumber}`);
+        
         // Search FindChips
-        const componentData = await searchFindChips(partNumber.trim());
+        let componentData;
+        try {
+            componentData = await searchFindChips(trimmedPartNumber);
+        } catch (searchError) {
+            console.error(`❌ Error searching FindChips for ${trimmedPartNumber}:`, searchError.message);
+            return res.status(500).json({
+                success: false,
+                error: `Failed to search for "${trimmedPartNumber}": ${searchError.message}. Please check if the part number is correct and try again.`
+            });
+        }
+        
+        // Validate that we got actual data (not just empty fields)
+        if (!componentData || (!componentData.description || componentData.description === `${trimmedPartNumber} Component`)) {
+            // Check if we have at least price or distributor data
+            const hasData = componentData && (
+                (componentData.lowestPrice && componentData.lowestPrice !== 'N/A') ||
+                (componentData.distributor && componentData.distributor !== 'N/A') ||
+                (componentData.manufacturer && componentData.manufacturer !== '')
+            );
+            
+            if (!hasData) {
+                console.error(`⚠️ No data found for part number: ${trimmedPartNumber}`);
+                return res.status(404).json({
+                    success: false,
+                    error: `No data found for part number "${trimmedPartNumber}". The part may not exist on FindChips or may be unavailable. Please verify the part number and try again.`
+                });
+            }
+        }
         
         // Update or add component
         if (existingIndex >= 0) {
             components[existingIndex] = { ...components[existingIndex], ...componentData };
+            console.log(`✅ Component updated: ${trimmedPartNumber}`);
         } else {
             components.push(componentData);
+            console.log(`✅ Component added: ${trimmedPartNumber}`);
         }
         
         // Save to Excel for this user
-        const saved = saveComponentsToExcel(components, userId);
-        
-        if (!saved) {
-            console.error('Failed to save to Excel file');
+        try {
+            const saved = saveComponentsToExcel(components, userId);
+            if (!saved) {
+                console.error('⚠️ Failed to save to Excel file');
+                return res.status(500).json({
+                    success: false,
+                    error: 'Failed to save component to Excel file. Please try again.'
+                });
+            }
+        } catch (saveError) {
+            console.error('❌ Error saving to Excel:', saveError.message);
+            return res.status(500).json({
+                success: false,
+                error: `Failed to save component: ${saveError.message}`
+            });
         }
         
         res.json({
             success: true,
             data: componentData,
-            message: existingIndex >= 0 ? 'Component updated' : 'Component added'
+            message: existingIndex >= 0 ? 'Component updated successfully!' : 'Component added successfully!'
         });
         
     } catch (error) {
-        console.error('Search error:', error.message);
+        console.error('❌ Search error:', error.message);
+        console.error('❌ Stack trace:', error.stack);
         res.status(500).json({
             success: false,
-            error: error.message
+            error: `An unexpected error occurred: ${error.message}. Please try again.`
         });
     }
 });
